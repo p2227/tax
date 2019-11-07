@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>年度个税计算器</title>
+    <style>
+        input{
+            width:26em;
+        }
+        table{
+            border-collapse: collapse
+        }
+        td,th{
+            border:1px solid black;
+            padding: 0 5px;
+        }
+        summary{
+            cursor: pointer;
+        }
+    </style>
+</head>
+
+<body>
+    <p>税前月薪：<input id="salary" type="number" value="10000" step="500"/></p>
+    <p>三险一金：<input id="security" type="number" placeholder="养老+医疗+公积金(8% + 2% + 12%)，失业险动态" value="2200" />
+        <label><button onclick="security.value = salary.valueAsNumber * 0.22">帮我大概填个值</button></label>
+    </p>
+    <p>专项扣除：<input id="deduct" type="number" placeholder="子女教育，老人，房租等专项，月额度，例如1500" value="0" step="500"/></p>
+    <p>PS:免税额度5000已经内置，不用填</p>
+    <p>年终奖：<input id="yearend" type="number" onblur="writeToLs(); showResultYearend();"/><span id="r-year-end"></span></p>
+    <button id="cal" onclick="writeToLs(); showResult();">计算</button>
+    <button id="calMultiply" onclick="writeToLs(); showResultMultiply();">计算一下5倍工资的情况(三险一金按22%算)</button>
+    <div id="tb"></div>
+    <script>
+        var tuple = [
+            { start: 0, end: 36000, rat: 0.03, minus: 0 },
+            { start: 36000, end: 144000, rat: 0.1, minus: 2520 },
+            { start: 144000, end: 300000, rat: 0.2, minus: 16920 },
+            { start: 300000, end: 420000, rat: 0.25, minus: 31920 },
+            { start: 420000, end: 660000, rat: 0.3, minus: 52920 },
+            { start: 660000, end: 960000, rat: 0.35, minus: 85920 },
+            { start: 960000, end: Infinity, rat: 0.45, minus: 181920 },
+        ]
+
+        var lsTuple = ['salary', 'security', 'deduct', 'yearend'];
+
+        var TAX_LIMIT = 5000;
+
+        var columns = [{ text: '月份', int: true },{ text: '税前' }, { text: '实际到手' }, { text: '累计到手' }, { text: '三险一金' }, { text: '纳税' }, { text: '税占比%', percent: true }, { text: '累计纳税' }];
+
+        function g(id){
+            return document.getElementById(id);
+        }
+
+        function writeToLs(){
+            lsTuple.forEach(key=> window.localStorage.setItem(`tax-${key}`,g(key).value));
+        }
+
+        function readFromLs(){
+            lsTuple.forEach(key=> g(key).value = window.localStorage.getItem(`tax-${key}`) || g(key).value);
+        }
+
+        function doCal(salary, calSecurity) {
+            var deduct = g('deduct').valueAsNumber;
+            var security = calSecurity ? salary * 0.22 : g('security').valueAsNumber;
+
+            // 按年计算的情况
+            let year = [];
+            let monthTaxAble = salary - security - deduct - TAX_LIMIT;
+            let yearAllAftax = 0;
+            let taxValueAll = 0;
+            let aftaxAll = 0;
+            (function(){
+                let taxValue = 0;
+                let aftax = 0;                
+                
+                for (let i = 1; i <= 12; i++) {
+                    let taxable = Math.max(monthTaxAble * i, 0);
+                    for (let j = 0; j < tuple.length; j++) {
+                        let item = tuple[j];
+                        if (taxable >= item.start && taxable < item.end) {
+                            taxValue = taxable * item.rat - item.minus - taxValueAll;
+                            taxValueAll += taxValue;
+                            aftax = salary - security - taxValue;
+                            aftaxAll += aftax;
+                            break;
+                        }
+                        continue;
+                    }
+                    year.push([i, salary, aftax, aftaxAll, security,  taxValue, taxValue / salary, taxValueAll]);
+                    yearAllAftax += aftax;
+                }
+            })()
+            
+
+            // 按月计算的情况
+            let month = {};
+            (function(){
+                let taxValue = 0;
+                let aftax = 0;   
+                let taxable = Math.max(monthTaxAble, 0);
+                for (let j = 0; j < tuple.length; j++) {
+                    let item = tuple[j];
+                    if (taxable >= item.start / 12 && taxable < item.end / 12) {
+                        taxValue = taxable * item.rat - item.minus / 12;
+                        aftax = salary - security - taxValue;
+                        break;
+                    }
+                    continue;
+                }
+                month = [0, salary, aftax, aftax * 12, security, taxValue, taxValue / salary, taxValue * 12]
+            })();
+            return {
+                year,
+                month,
+                minus:{
+                    aftax: yearAllAftax - month[3], taxValue: taxValueAll - month[month.length - 1]
+                }
+            };
+        }
+
+        function formatValue(columns, idx, value){
+            let formatSet = columns[idx];
+            if(formatSet.int) return `<td>${value}</td>`;
+            if(formatSet.percent) return `<td>${(value * 100).toFixed(2)}%</td>`;
+            return `<td>${value.toFixed(2)}</td>`;
+        }
+
+        function drawOneTable(data, open) {
+            const { year, month, minus }= data;
+            return `<details ${open}>
+                <div>按月计算：${columns.slice(1).map((item,idx) => `${item.text}:${month[idx+1].toFixed(2)}　`).join('')}</div>
+                <div>收入相差:${minus.aftax.toFixed(2)}, 纳税相差:${minus.taxValue.toFixed(2)}</div>
+                <summary>${year[0][1]}的情况, 相差${minus.aftax.toFixed(2)}</summary>
+                <table>
+                    <tr>${columns.map(item => `<th>${item.text}</th>`).join('')}</tr> 
+                    ${
+                        year.map(d => `<tr>
+                            ${d.map((num, idx) => formatValue(columns, idx, num)).join('')}
+                        </tr>`).join('')
+                    }
+                </table>
+            </details>`
+        }
+
+        var tb = g('tb');
+
+        function showResult() {
+            tb.innerHTML = drawOneTable(
+                doCal(g('salary').valueAsNumber),'open'
+            )
+        }
+
+        function showResultMultiply() {
+            var html = '';
+            var salary = g('salary').valueAsNumber;
+            var salaryMultiply = salary * 5;
+            while(salary <= salaryMultiply){
+                html += drawOneTable(doCal(salary, true), '');
+                salary += 500;
+            }
+            tb.innerHTML = html;
+        }
+
+        function showResultYearend(){
+            let end = g('yearend').valueAsNumber;
+            let resultDOM = g('r-year-end');
+            if(!end || end <0) return resultDOM.innerHTML = '0';
+            let taxable = end / 12;
+            for (let j = 0; j < tuple.length; j++) {
+                let item = tuple[j];
+                if (taxable >= item.start / 12 && taxable < item.end / 12) {
+                    taxValue = end * item.rat - item.minus / 12;
+                    aftax = end - taxValue;
+                    break;
+                }
+                continue;
+            }
+            resultDOM.innerHTML = `税后：${aftax.toFixed(2)}，扣税：${taxValue.toFixed(2)}`;
+        }
+
+        readFromLs();
+
+    </script>
+</body>
+
+</html>
